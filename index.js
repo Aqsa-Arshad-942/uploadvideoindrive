@@ -3,26 +3,38 @@ const multer = require("multer");
 const fs = require("fs");
 const path = require("path");
 const { google } = require("googleapis");
-require("dotenv").config();
+const nodemailer = require("nodemailer");
 const cors = require("cors");
+require("dotenv").config();
 
 const app = express();
 const upload = multer({ dest: "uploads/" });
 
 app.use(cors({
-    origin: "*", // or set it to "https://your-shopify-site.com"
-  }));
+  origin: "*", // Update to your Shopify domain for production
+}));
 
+// Google Drive Auth
 const auth = new google.auth.GoogleAuth({
   keyFile: "credentials.json",
   scopes: ["https://www.googleapis.com/auth/drive.file"],
 });
-
 const drive = google.drive({ version: "v3", auth });
+
+// Nodemailer setup
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
 
 app.post("/upload", upload.single("video"), async (req, res) => {
   try {
     const filePath = req.file.path;
+
+    // Upload to Google Drive
     const fileMetadata = {
       name: req.file.originalname,
       parents: process.env.FOLDER_ID ? [process.env.FOLDER_ID] : [],
@@ -38,7 +50,7 @@ app.post("/upload", upload.single("video"), async (req, res) => {
       fields: "id, name",
     });
 
-    // Make file viewable
+    // Make it public
     await drive.permissions.create({
       fileId: file.data.id,
       requestBody: {
@@ -49,7 +61,19 @@ app.post("/upload", upload.single("video"), async (req, res) => {
 
     const viewLink = `https://drive.google.com/file/d/${file.data.id}/preview`;
 
-    fs.unlinkSync(filePath); // Clean up uploaded file
+    // Email Notification
+    await transporter.sendMail({
+      from: `"Shopify Upload" <${process.env.EMAIL_USER}>`,
+      to: process.env.ADMIN_EMAIL,
+      subject: "New Video Uploaded",
+      html: `
+        <h3>New Video Uploaded</h3>
+        <p><strong>File Name:</strong> ${file.data.name}</p>
+        <p><a href="${viewLink}" target="_blank">View Video</a></p>
+      `,
+    });
+
+    fs.unlinkSync(filePath); // Remove local file
 
     res.json({
       success: true,
